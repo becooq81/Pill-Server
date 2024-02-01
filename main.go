@@ -1,40 +1,19 @@
 package main
 
 import (
-	c "Pill-Server/config"
 	"encoding/csv"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"regexp"
+	"strings"
 
 	"sync"
-
-	"github.com/spf13/viper"
 )
 
 var mutex = &sync.Mutex{}
-
-func printCSV(file *os.File) error {
-	if file == nil {
-		return fmt.Errorf("file is nil")
-	}
-
-	numRows := 0
-	reader := csv.NewReader(file)
-
-	for {
-		record, err := reader.Read()
-		if err != nil {
-			break
-		}
-		fmt.Println(record)
-		numRows++
-	}
-
-	return nil
-}
 
 // Response is the top-level structure for the XML response
 type Response struct {
@@ -72,6 +51,38 @@ type Item struct {
 	Bizrno              string `xml:"bizrno"`
 }
 
+func removeTextWithinParentheses(text string) string {
+
+	// Define a regular expression to match and remove text within parentheses, curly braces, and square brackets
+	re := regexp.MustCompile(`\([^()]*\)|\{[^\{\}]*\}|\[[^\[\]]*\]`)
+
+	// Apply the pattern iteratively until no more matches are found
+	for re.MatchString(text) {
+		text = re.ReplaceAllString(text, "")
+	}
+
+	// Remove extra spaces caused by the removal
+	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
+
+	return text
+}
+
+func processColumn(row []string) ([]string, []string) {
+	processedText := removeTextWithinParentheses(row[1]) // Assuming '제품명' is the second column
+	//fmt.Printf("Processed text: %s\n", processedText)
+	processedText = regexp.MustCompile(`\|.*$`).ReplaceAllString(processedText, "")
+
+	var splitTexts []string
+	if !regexp.MustCompile(`\d+\.\d+%`).MatchString(processedText) {
+		splitTexts = regexp.MustCompile(`\d+\.`).Split(processedText, -1)
+		if len(splitTexts) > 1 {
+			splitTexts = splitTexts[1:] // Remove the first element which is empty or not needed
+		}
+	}
+	row[1] = processedText
+	return row, splitTexts
+}
+
 func writePage(writer *csv.Writer, fullUrl string, page int) {
 	// Send request to API
 	fmt.Print("Fetching page ", page, "\n")
@@ -107,9 +118,27 @@ func writePage(writer *csv.Writer, fullUrl string, page int) {
 
 }
 
+func removeDuplicateRows(records [][]string) [][]string {
+	// Create a map to store unique values from the second column
+	uniqueSecondColumn := make(map[string]bool)
+
+	// Create a new slice for the result without duplicates
+	var result [][]string
+
+	for _, row := range records {
+		// Check if the value in the second column is non-empty and unique
+		if row[1] != "" && !uniqueSecondColumn[row[1]] {
+			uniqueSecondColumn[row[1]] = true
+			result = append(result, row)
+		}
+	}
+
+	return result
+}
+
 func main() {
 
-	viper.SetConfigName("config")
+	/* viper.SetConfigName("config")
 	viper.AddConfigPath("./config")
 	viper.AutomaticEnv()
 	viper.SetConfigType("yml")
@@ -137,7 +166,7 @@ func main() {
 	// Write CSV header
 	writer.Write([]string{"entpName", "itemName", "itemSeq", "efcyQesitm", "useMethodQesitm", "atpnWarnQesitm", "atpnQesitm", "intrcQesitm", "seQesitm", "depositMethodQesitm", "openDe", "updateDe", "itemImage", "bizrno"})
 
-	var totalRows int
+	var totalCount, numOfRows int
 	totalPages := 1
 
 	var fullEndPoint = configuration.Api.EndPoint + "/" + configuration.Api.Operation + "?serviceKey=" + configuration.Api.ServiceKey
@@ -164,34 +193,95 @@ func main() {
 		panic(err)
 	}
 
-	totalRows = response.Body.TotalCount
-	totalPages = (totalRows + 9) / 10 // Assuming 10 items per page
+	totalCount = response.Body.TotalCount
+	numOfRows = response.Body.NumOfRows
+	totalPages = (totalCount + 9) / numOfRows // Assuming 10 items per page
+	fmt.Println("Total pages: ", totalPages)
 
 	var wg sync.WaitGroup
+
+	maxGoroutines := 10
+	guard := make(chan struct{}, maxGoroutines)
+
 	for page := 0; page <= totalPages; page++ {
 		fullUrl := fullEndPoint + "&pageNo=" + fmt.Sprint(page)
 		wg.Add(1)
-		go func(url string, pageNo int) {
+		// Acquire a slot
+		guard <- struct{}{}
+		go func(fullUrl string, pageNo int) {
 			defer wg.Done()
-			writePage(writer, url, pageNo)
+			// Your existing code for processing a page
+			writePage(writer, fullUrl, pageNo)
+			// Release the slot
+			<-guard
 		}(fullUrl, page)
 	}
 
 	// Wait for all goroutines to finish
 	wg.Wait()
-	writer.Flush()
+	writer.Flush() */
 
-	file, err = os.Open("output.csv")
+	file, err := os.Open("output.csv")
 	if err != nil {
 		fmt.Println("Error opening file:", err)
 		return
 	}
 	defer file.Close()
 
-	// Call printCSV to print the file
-	err = printCSV(file)
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+
+	// print number of records
+	fmt.Println(len(records))
+
 	if err != nil {
-		fmt.Println("Error:", err)
+		panic(err)
 	}
+
+	processedRows := [][]string{}
+	for _, row := range records[1:] { // Skipping header row
+		processedRow, splitTexts := processColumn(row)
+		if len(splitTexts) > 0 {
+			for _, splitText := range splitTexts {
+				trimmedSplitText := strings.TrimSpace(splitText)
+				splitTexts := strings.Split(trimmedSplitText, ",")
+				for _, split := range splitTexts {
+					newRow := make([]string, len(processedRow))
+					copy(newRow, processedRow)
+					newRow[1] = strings.TrimSpace(split)
+					processedRows = append(processedRows, newRow)
+				}
+			}
+		} else {
+			processedRows = append(processedRows, processedRow)
+		}
+	}
+
+	uniqueRecords := removeDuplicateRows(processedRows)
+
+	outputFile, err := os.Create("processed_file.csv")
+	if err != nil {
+		panic(err)
+	}
+	defer outputFile.Close()
+
+	newWriter := csv.NewWriter(outputFile)
+	defer newWriter.Flush()
+
+	// Writing the header
+	if len(records) > 0 {
+		newWriter.Write(records[0]) // Assuming the first row is the header
+	}
+
+	for _, processedRow := range uniqueRecords {
+		if err := newWriter.Write(processedRow); err != nil {
+			panic(err)
+		}
+	}
+	newWriter.Flush()
+
+	rowNum := len(uniqueRecords)
+
+	println(rowNum)
 
 }
