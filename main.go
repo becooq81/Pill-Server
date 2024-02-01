@@ -1,6 +1,7 @@
 package main
 
 import (
+	c "Pill-Server/config"
 	"encoding/csv"
 	"encoding/xml"
 	"fmt"
@@ -8,9 +9,12 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
 	"sync"
+
+	"github.com/spf13/viper"
 )
 
 var mutex = &sync.Mutex{}
@@ -69,16 +73,14 @@ func removeTextWithinParentheses(text string) string {
 
 func processColumn(row []string) ([]string, []string) {
 	processedText := removeTextWithinParentheses(row[1]) // Assuming '제품명' is the second column
-	//fmt.Printf("Processed text: %s\n", processedText)
 	processedText = regexp.MustCompile(`\|.*$`).ReplaceAllString(processedText, "")
 
 	var splitTexts []string
-	if !regexp.MustCompile(`\d+\.\d+%`).MatchString(processedText) {
+	if !regexp.MustCompile(`\d+\.\d+`).MatchString(processedText) {
 		splitTexts = regexp.MustCompile(`\d+\.`).Split(processedText, -1)
-		if len(splitTexts) > 1 {
-			splitTexts = splitTexts[1:] // Remove the first element which is empty or not needed
-		}
+
 	}
+
 	row[1] = processedText
 	return row, splitTexts
 }
@@ -118,7 +120,22 @@ func writePage(writer *csv.Writer, fullUrl string, page int) {
 
 }
 
-func removeDuplicateRows(records [][]string) [][]string {
+// Temporary solution due to error in data provided by api.
+func preprocessRecords(records [][]string) [][]string {
+	var processedRecords [][]string
+
+	for _, row := range records {
+		if row[1] == "고려아시클로버크림(아시클로버)(수출명:바이락스크림(VIRAXCream)이노바이락스5%크림(INNOVIRAX5%Cream)" {
+			row[1] = row[1] + ")"
+		}
+
+		processedRecords = append(processedRecords, row)
+	}
+
+	return processedRecords
+}
+
+func removeDuplicateAndSortRows(records [][]string) [][]string {
 	// Create a map to store unique values from the second column
 	uniqueSecondColumn := make(map[string]bool)
 
@@ -133,12 +150,17 @@ func removeDuplicateRows(records [][]string) [][]string {
 		}
 	}
 
+	// Sort the result by the second column value
+	sort.SliceStable(result, func(i, j int) bool {
+		return result[i][1] < result[j][1]
+	})
+
 	return result
 }
 
 func main() {
 
-	/* viper.SetConfigName("config")
+	viper.SetConfigName("config")
 	viper.AddConfigPath("./config")
 	viper.AutomaticEnv()
 	viper.SetConfigType("yml")
@@ -219,9 +241,9 @@ func main() {
 
 	// Wait for all goroutines to finish
 	wg.Wait()
-	writer.Flush() */
+	writer.Flush()
 
-	file, err := os.Open("output.csv")
+	file, err = os.Open("output.csv")
 	if err != nil {
 		fmt.Println("Error opening file:", err)
 		return
@@ -231,33 +253,44 @@ func main() {
 	reader := csv.NewReader(file)
 	records, err := reader.ReadAll()
 
-	// print number of records
-	fmt.Println(len(records))
-
 	if err != nil {
 		panic(err)
 	}
 
+	preprocessedRecords := preprocessRecords(records[1:])
+
 	processedRows := [][]string{}
-	for _, row := range records[1:] { // Skipping header row
-		processedRow, splitTexts := processColumn(row)
-		if len(splitTexts) > 0 {
-			for _, splitText := range splitTexts {
-				trimmedSplitText := strings.TrimSpace(splitText)
-				splitTexts := strings.Split(trimmedSplitText, ",")
+	for _, row := range preprocessedRecords[1:] { // Including the header row
+		if row[1] != "" { // Check if the first column is not empty
+			processedRow, splitTexts := processColumn(row)
+
+			if len(splitTexts) > 0 {
+				for _, splitText := range splitTexts {
+					trimmedSplitText := strings.TrimSpace(splitText)
+					splitTexts := strings.Split(trimmedSplitText, ",")
+
+					for _, split := range splitTexts {
+						newRow := make([]string, len(processedRow))
+						copy(newRow, processedRow)
+						newRow[1] = strings.TrimSpace(split)
+						processedRows = append(processedRows, newRow)
+					}
+				}
+			} else if strings.Contains(processedRow[1], ",") {
+				splitTexts := strings.Split(processedRow[1], ",")
 				for _, split := range splitTexts {
 					newRow := make([]string, len(processedRow))
 					copy(newRow, processedRow)
 					newRow[1] = strings.TrimSpace(split)
 					processedRows = append(processedRows, newRow)
 				}
+			} else {
+				processedRows = append(processedRows, processedRow)
 			}
-		} else {
-			processedRows = append(processedRows, processedRow)
 		}
 	}
 
-	uniqueRecords := removeDuplicateRows(processedRows)
+	uniqueRecords := removeDuplicateAndSortRows(processedRows)
 
 	outputFile, err := os.Create("processed_file.csv")
 	if err != nil {
@@ -279,9 +312,5 @@ func main() {
 		}
 	}
 	newWriter.Flush()
-
-	rowNum := len(uniqueRecords)
-
-	println(rowNum)
 
 }
