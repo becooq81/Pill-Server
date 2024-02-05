@@ -2,7 +2,10 @@ module example.com/hello
 
 go 1.21.6
 
-require github.com/GoogleCloudPlatform/functions-framework-go v1.8.0
+require (
+	github.com/GoogleCloudPlatform/functions-framework-go v1.8.0
+	github.com/mattn/go-sqlite3 v1.14.22
+)
 
 require (
 	cloud.google.com/go/functions v1.15.4 // indirect
