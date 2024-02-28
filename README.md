@@ -11,5 +11,4 @@ The Flutter application downloads data through Google Cloud Function when necess
 PillKaBoo Repositories
 + **:house: Homepage:** https://github.com/becooq81/PillKaBoo-Homepage <br>
 + **:iphone: Mobile:** https://github.com/becooq81/PillKaBoo <br>
-+ **🤖 ML:**  <br>
 + **:globe_with_meridians: Serverless API**: https://github.com/becooq81/PillKaBoo-Backend <br><br>
